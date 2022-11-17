@@ -146,7 +146,7 @@ def insert_new_users(links):
             users.bulk_write(update_list,ordered=False)
 
             return [{"Added": {"usernames":updated_list, "count": len(updated_list)}}, {"Error Users": {"usernames": list(set(new_user_names) - set(updated_list)), "count": len(list(set(new_user_names) - set(updated_list)))}}]
-        return {"Error": "All usernames, which were provided are not exist or suspendet"}
+        return {"Error": "All usernames, which were provided are not exist or suspended"}
     return {"Error":"Bad Input"}
 
 def get_last_10_tweets(twitter_id):
