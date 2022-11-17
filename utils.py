@@ -2,6 +2,8 @@ from datetime import datetime
 from multiprocessing import Manager, Pool
 from time import time
 
+import pdb
+from pprint import pprint
 import requests
 from pymongo import MongoClient, UpdateOne
 
@@ -16,7 +18,7 @@ users = db["users"]
 session = requests.session()
 session.headers = {"Authorization": f"Bearer {BARE_TOKEN}"}  # type: ignore
 
-def get_user_unfo(usernames, list):
+def get_user_unfo(usernames, list, updated_list):
 
     """Функция забирает основую информациб с аккаунтов (такую как 'id','username','description','name','followers_count', 'following_count','update_datetime' -- дата последнего обнавления,"twitter_link".
 
@@ -26,7 +28,7 @@ def get_user_unfo(usernames, list):
         usernames (str): строка из юзернеймов через запятую на поис
         list (manager): список, шарющий память между потоками, чтобы пультипроцессоринг нрмально отработал
     """
-
+    
     print(f"Sending Req {datetime.now().strftime('%Y-%m-%dT%H:%M:%S')}")
     raw_data = session.get(f'https://api.twitter.com/2/users/by?usernames={usernames}&user.fields=description,id,name,username,public_metrics').json()
     if 'data' in raw_data.keys():
@@ -41,8 +43,9 @@ def get_user_unfo(usernames, list):
                 "update_datetime" : int(time()),
                 "twitter_link": f"https://twitter.com/{user['username']}"
             }}))
+            updated_list.append(user['username'])
 
-def clear_username(links: str, manager_list):
+def clear_username(links: str, manager_list, updated_list):
 
     """_summary_
 
@@ -53,12 +56,13 @@ def clear_username(links: str, manager_list):
     Returns:
         list: возращает список со 100 юзернеймами и списком для мультипроцессеринга [[100_usernames_str,list], [100_usernames_str,list], ...]
     """
-    usernames = links.replace('https://twitter.com/', '').split('\n')
+
+    usernames = links.replace('https://twitter.com/', '').strip().split('\n')
     n = 100 #how much in one list
-    return [[','.join(usernames[i * n:(i + 1) * n]), manager_list] for i in range((len(usernames) + n - 1) // n )]
+    return  usernames, [[','.join(usernames[i * n:(i + 1) * n]), manager_list, updated_list] for i in range((len(usernames) + n - 1) // n )]
 
 
-def find_user(username: str):
+def find_user_via_username(username: str):
 
     """нужно для поиска юзера по юзернейму в базе и если его нет, то искать в твиттере, добавлять в базу и возвращать пользователю
 
@@ -85,8 +89,38 @@ def find_user(username: str):
         users.insert_one(result_dict)
         return result_dict
 
-    return [{"Error": "Wrong ID"}]
+    return [{"Error": "Wrong Username"}]
 
+
+def find_user_via_userid(userid: str):
+
+    """нужно для поиска юзера по айди в базе и если его нет, то искать в твиттере, добавлять в базу и возвращать пользователю
+
+    Returns:
+        list: возвращает или ошибку
+    """
+
+    user = users.find_one({"_id": userid})
+    if user:
+        return user
+    print('Getting data')
+    raw_data = session.get(f'https://api.twitter.com/2/users/{userid}?user.fields=description,id,public_metrics,username').json()
+
+    if 'data' in raw_data.keys():
+        result_dict = {
+            '_id': raw_data['data']['id'],
+            'username': raw_data['data']['username'],
+            'description': raw_data['data']['description'],
+            'name': raw_data['data']['name'],
+            'followers_count': raw_data['data']['public_metrics']['followers_count'],
+            "following_count" : raw_data['data']['public_metrics']['following_count'],
+            "update_datetime" : int(time()),
+            "twitter_link": f"https://twitter.com/{raw_data['data']['username']}"
+        }
+        users.insert_one(result_dict)
+        return result_dict
+
+    return [{"Error": "Wrong UserID"}]
 
 def insert_new_users(links):
 
@@ -95,20 +129,25 @@ def insert_new_users(links):
     Returns:
         list: Простая заглушка
     """
+    if links:
+        manager = Manager()
+        update_list = manager.list()
+        updated_list = manager.list()
 
-    manager = Manager()
-    update_list = manager.list()
+        new_user_names, one_list = clear_username(links, update_list, updated_list)
 
-    one_list = clear_username(links, update_list)
+        pool = Pool(processes=5)
+        pool.starmap(get_user_unfo, one_list)
+        pool.close()
 
-    pool = Pool(processes=5)
-    pool.starmap(get_user_unfo, one_list)
-    pool.close()
+        update_list = list(update_list)
+        updated_list = list(updated_list)
+        if update_list:
+            users.bulk_write(update_list,ordered=False)
 
-    update_list = list(update_list)
-    users.bulk_write(update_list,ordered=False)
-
-    return [{"Success": "Links are added"}]
+            return [{"Added": {"usernames":updated_list, "count": len(updated_list)}}, {"Error Users": {"usernames": list(set(new_user_names) - set(updated_list)), "count": len(list(set(new_user_names) - set(updated_list)))}}]
+        return {"Error": "All usernames, which were provided are not exist or suspendet"}
+    return {"Error":"Bad Input"}
 
 def get_last_10_tweets(twitter_id):
 

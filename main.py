@@ -16,8 +16,12 @@ async def last_10_tweets(twitter_id : int):
 
 #ручка для получения инфы о юзере по юзернейму
 @app.get("/api/user/{username}")
-async def get_user_info(username : str):
-    return find_user(username=username)
+async def get_user_info_via_username(username : str):
+    return find_user_via_username(username=username)
+
+@app.get("/api/userid/{userid}")
+async def get_user_info_via_userid(userid : str):
+    return find_user_via_userid(userid=userid)
 
 #ручка для отправки списка пользователей
 @app.post("/api/add_users")
